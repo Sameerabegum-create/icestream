@@ -3,11 +3,12 @@ import json
 from pathlib import Path
 from kafka import KafkaProducer
 
-# Project paths
 BASE_DIR = Path(__file__).resolve().parent.parent
 INPUT_FILE = BASE_DIR / "output" / "processed" / "online_retail_prepared.csv"
 
-# Connect to Kafka
+TOPIC = "retail-events"
+BATCH_SIZE = 1000
+
 producer = KafkaProducer(
     bootstrap_servers="localhost:9092",
     value_serializer=lambda value: json.dumps(
@@ -15,25 +16,24 @@ producer = KafkaProducer(
     ).encode("utf-8")
 )
 
-TOPIC = "retail-events"
+print("Starting IceStream dataset producer...")
 
-# Read prepared dataset
-df = pd.read_csv(INPUT_FILE)
+total_sent = 0
 
-print("Dataset loaded:", len(df), "records")
-
-# Send records to Kafka
 try:
-    for index, row in df.iterrows():
-        record = row.astype(object).where(pd.notna(row), None).to_dict()
-        producer.send(TOPIC, value=record)
+    for chunk in pd.read_csv(INPUT_FILE, chunksize=BATCH_SIZE):
+        for record in chunk.to_dict(orient="records"):
+            cleaned_record = {
+                key: None if pd.isna(value) else value
+                for key, value in record.items()
+            }
+            producer.send(TOPIC, value=cleaned_record)
 
-        if (index + 1) % 1000 == 0:
-            producer.flush()
-            print(f"Sent {index + 1} records")
+        producer.flush()
+        total_sent += len(chunk)
+        print(f"Total records sent: {total_sent}")
 
-    producer.flush()
-    print("All records sent successfully!")
+    print("Full dataset streaming completed!")
 
 finally:
     producer.close()
